@@ -1,4 +1,4 @@
-"# Fake News Detection 🔍
+# Fake News Detection 🔍
 
 An interactive machine learning application that analyzes political statements and predicts their truthfulness using multiple ML models.
 
