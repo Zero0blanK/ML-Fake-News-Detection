@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from sklearn.preprocessing import LabelEncoder
-import plotly.express as px
 import pickle
 import joblib
+import re
+import unicodedata
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer
 
 # Set page config
 st.set_page_config(
@@ -46,6 +47,25 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def clean_text(text):
+    """Clean and preprocess text data"""
+    text = text.lower()
+    text = re.sub(r'[^a-zA-Z0-9\s]', '', text)
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('utf-8')
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+def tokenize_and_lemmatize(text):
+    """Tokenize and lemmatize text"""
+    lemmatizer = WordNetLemmatizer()
+    tokens = word_tokenize(text)
+    return ' '.join(lemmatizer.lemmatize(token) for token in tokens)
+
+def preprocess_statement(statement):
+    """Preprocess a single statement"""
+    cleaned_text = clean_text(statement)
+    return tokenize_and_lemmatize(cleaned_text)
+
 def load_models():
     """Load trained models and their associated data"""
     try:
@@ -56,15 +76,14 @@ def load_models():
             with open(f'models/{name}.pkl', 'rb') as f:
                 models[name.replace('_', ' ').title()] = pickle.load(f)
         
-        # Load encoders and scaler
-        encoders = joblib.load('models/encoders.joblib')
-        scaler = joblib.load('models/scaler.joblib')
+        # Load TF-IDF vectorizer
+        vectorizer = joblib.load('models/tfidf.joblib')
         
-        return models, encoders, scaler
+        return models, vectorizer
     except Exception as e:
         st.error(f"Error loading models: {e}")
         st.info("Please run train_models.ipynb first to train and save the models.")
-        return None, None, None
+        return None, None
 
 @st.cache_data
 def load_and_preprocess_data():
@@ -90,113 +109,48 @@ def load_and_preprocess_data():
 
 def clean_data(df):
     """Clean and preprocess the dataframe"""
-    df = df.dropna(subset=['label', 'statement', 'subject', 'party'])
+    # Drop rows with missing required fields
+    df = df.dropna(subset=['label', 'statement'])
     
-    numeric_columns = ['true_counts', 'false_counts', 'half_true_counts', 
-                      'barely_true_counts', 'pants_fire_counts']
+    # Convert label to boolean if it's not already
+    if not df['label'].dtype == bool:
+        df['label'] = df['label'].apply(lambda x: str(x).lower() in ['true', 'mostly-true', 'half-true'])
     
-    for col in numeric_columns:
-        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-    
-    df['statement_length'] = df['statement'].str.len()
-    df['total_fact_checks'] = (df['true_counts'] + df['false_counts'] + 
-                              df['half_true_counts'] + df['barely_true_counts'] + 
-                              df['pants_fire_counts'])
-    df['subject_category'] = df['subject'].apply(categorize_subject)
-    
-    # Clean party column
-    df['party'] = df['party'].fillna('none')
-    df['party'] = df['party'].astype(str).str.lower().str.strip()
-    df['party'] = df['party'].replace('', 'none')
-    
-    df['truthfulness_ratio'] = df['true_counts'] / (df['total_fact_checks'] + 1)
+    # Clean statement text
+    df['processed_statement'] = df['statement'].apply(preprocess_statement)
     
     return df
 
-@st.cache_data
-def categorize_subject(subject):
-    """Categorize subjects into broader categories"""
-    if pd.isna(subject) or subject == '' or str(subject).lower() == 'nan':
-        return 'other'
-    
-    subject = str(subject).lower()
-    
-    if any(word in subject for word in ['health', 'medicare', 'medicaid']):
-        return 'healthcare'
-    elif any(word in subject for word in ['economy', 'jobs', 'unemployment', 'taxes', 'budget']):
-        return 'economy'
-    elif any(word in subject for word in ['education', 'school', 'student']):
-        return 'education'
-    elif any(word in subject for word in ['immigration', 'border']):
-        return 'immigration'
-    elif any(word in subject for word in ['military', 'war', 'veteran']):
-        return 'military'
-    elif any(word in subject for word in ['environment', 'climate', 'energy']):
-        return 'environment'
-    elif any(word in subject for word in ['campaign', 'election', 'voting']):
-        return 'political_process'
-    else:
-        return 'other'
-
-def preprocess_features(df):
-    """Preprocess features for machine learning"""
-    encoders = {}
-    df_processed = df.copy()
-    
-    # Encode categorical variables
-    for col, prefix in [('label', 'label'), ('subject_category', 'subject'), 
-                       ('party', 'party'), ('state', 'state'), ('job_title', 'job_title')]:
-        le = LabelEncoder()
-        df_processed[f'{col}_encoded'] = le.fit_transform(df[col])
-        encoders[prefix] = le
-    
-    feature_cols = [
-        'subject_category_encoded', 'party_encoded', 'state_encoded', 'job_title_encoded',
-        'true_counts', 'false_counts', 'half_true_counts', 
-        'barely_true_counts', 'pants_fire_counts', 'total_fact_checks',
-        'statement_length', 'truthfulness_ratio'
-    ]
-    
-    X = df_processed[feature_cols]
-    y = df_processed['label_encoded']
-    
-    return X, y, encoders, df_processed
 
 def initialize_app():
-    """Initialize the application by loading models and data"""
+    """Initialize the application by loading models"""
     if 'initialized' not in st.session_state:
         with st.spinner("Initializing application..."):
-            # Load models
-            models, model_encoders, model_scaler = load_models()
+            # Load models and vectorizer
+            models, vectorizer = load_models()
             if models is None:
                 st.error("Failed to load models. Please run train_models.ipynb first.")
                 st.stop()
             
-            # Load and preprocess data
-            df = load_and_preprocess_data()
-            if df is None:
-                st.error("Failed to load data. Please check your data source.")
-                st.stop()
-            
-            # Preprocess features
-            X, y, encoders, df_processed = preprocess_features(df)
-            
-            # Store everything in session state
+            # Store in session state
             st.session_state.update({
                 'models': models,
-                'encoders': model_encoders,
-                'scaler': model_scaler,
-                'data': df,
-                'X': X,
-                'y': y,
+                'vectorizer': vectorizer,
                 'initialized': True
             })
     
-    return st.session_state.data
+    return True
+
 
 def quick_analysis_tab():
     """Statement analysis interface"""
-    st.header("💬 Statement Analysis")
+    st.header("💬 Quick Statement Analysis")
+    
+    # Introduction text
+    st.markdown("""
+    Enter a political statement and our models will analyze it to determine if it's likely to be true or false.
+    The models will analyze the text content to make predictions.
+    """)
     
     # Text input for statement
     statement_text = st.text_area(
@@ -210,224 +164,148 @@ def quick_analysis_tab():
             st.error("Please enter a statement to analyze.")
             return
         
-        # Use default/average values for other features
-        df = st.session_state.data
-        input_data = {
-            'subject_category': df['subject_category'].mode()[0],
-            'party': df['party'].mode()[0],
-            'state': df['state'].mode()[0],
-            'job_title': df['job_title'].mode()[0],
-            'true_counts': int(df['true_counts'].mean()),
-            'false_counts': int(df['false_counts'].mean()),
-            'half_true_counts': int(df['half_true_counts'].mean()),
-            'barely_true_counts': int(df['barely_true_counts'].mean()),
-            'pants_fire_counts': int(df['pants_fire_counts'].mean())
-        }
-        
-        make_prediction(statement_text, input_data)
+        make_prediction(statement_text)
 
 def detailed_analysis_tab():
-    """Detailed analysis interface with all features"""
     st.header("🎯 Detailed Analysis")
     
-    with st.form("detailed_analysis_form"):
-        # Text input for statement
-        statement_text = st.text_area(
-            "Enter the political statement to analyze:",
-            height=150,
-            placeholder="Enter the political statement here..."
-        )
+    # Create two sub-tabs
+    manual_tab, test_tab = st.tabs(["💭 Manual Input", "🔍 Test Examples"])
+    
+    with manual_tab:
+        st.markdown("""
+        Enter a statement to analyze along with metadata to understand the model's performance
+        with different input combinations.
+        """)
         
-        # Feature inputs in columns
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Speaker Information")
-            df = st.session_state.data
-            subject_input = st.selectbox("Subject Category", df['subject_category'].unique())
-            party_input = st.selectbox("Political Party", df['party'].unique())
-            state_input = st.selectbox("State", df['state'].unique())
-            job_title_input = st.selectbox("Job Title", df['job_title'].unique())
-        
-        with col2:
-            st.subheader("Historical Fact Checks")
-            true_counts = st.number_input("Previous True Statements", 0, 100, 10)
-            false_counts = st.number_input("Previous False Statements", 0, 100, 10)
-            half_true_counts = st.number_input("Half-True Statements", 0, 50, 5)
-            barely_true_counts = st.number_input("Barely-True Statements", 0, 50, 5)
-            pants_fire_counts = st.number_input("Pants-on-Fire Statements", 0, 30, 2)
-        
-        submitted = st.form_submit_button("Analyze Statement", type="primary")
-        
-        if submitted:
-            if not statement_text:
-                st.error("Please enter a statement to analyze.")
-                return
+        # Create a form for input
+        with st.form("manual_analysis_form"):
+            # Statement input
+            statement_text = st.text_area(
+                "Enter the political statement to analyze:",
+                height=150,
+                placeholder="Enter the political statement here..."
+            )
             
-            input_data = {
-                'subject_category': subject_input,
-                'party': party_input,
-                'state': state_input,
-                'job_title': job_title_input,
-                'true_counts': true_counts,
-                'false_counts': false_counts,
-                'half_true_counts': half_true_counts,
-                'barely_true_counts': barely_true_counts,
-                'pants_fire_counts': pants_fire_counts
-            }
+            # Optional context input
+            st.markdown("### Optional Context")
+            context = st.text_area(
+                "Additional context (if any):",
+                height=100,
+                placeholder="Enter any additional context about the statement...",
+                help="This helps provide background information about the statement."
+            )
             
-            make_prediction(statement_text, input_data)
+            # Submit button
+            submitted = st.form_submit_button("Analyze Statement", type="primary")
+            
+            if submitted:
+                if not statement_text:
+                    st.error("Please enter a statement to analyze.")
+                    return
+                
+                with st.spinner("Analyzing statement..."):
+                    make_prediction(statement_text)
+                    
+                if context:
+                    st.markdown("### Statement Context")
+                    st.info(context)
+    
+    with test_tab:
+        st.markdown("""
+        Analyze examples from our test dataset to evaluate model performance
+        on real-world statements.
+        """)
+        
+        if st.button("Analyze Test Examples", type="primary"):
+            with st.spinner("Analyzing test examples..."):
+                analyze_random_test_data()
 
-def data_overview_tab():
-    """Data overview and model performance interface"""
-    st.header("📊 Data Overview")
-    
-    df = st.session_state.data
-    
-    # Key metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Records", len(df))
-    with col2:
-        st.metric("Unique Labels", df['label'].nunique())
-    with col3:
-        st.metric("Unique Subjects", df['subject'].nunique())
-    with col4:
-        st.metric("Unique Parties", df['party'].nunique())
-    
-    # Label distribution
-    st.subheader("Truth Label Distribution")
-    label_counts = df['label'].value_counts()
-    fig = px.pie(
-        values=label_counts.values,
-        names=label_counts.index,
-        title="Distribution of Truth Labels",
-        color_discrete_sequence=px.colors.qualitative.Set3
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Subject distribution
-    st.subheader("Subject Categories")
-    subject_counts = df['subject_category'].value_counts()
-    fig = px.bar(
-        x=subject_counts.index,
-        y=subject_counts.values,
-        title="Distribution of Subject Categories",
-        labels={'x': 'Category', 'y': 'Count'},
-        color=subject_counts.values,
-        color_continuous_scale='Viridis'
-    )
-    fig.update_layout(xaxis_tickangle=45)
-    st.plotly_chart(fig, use_container_width=True)
-
-def make_prediction(statement_text, input_data):
+def make_prediction(statement_text):
     """Make predictions using all models"""
     try:
-        # Calculate derived features
-        statement_length = len(statement_text)
-        total_fact_checks = sum([
-            input_data['true_counts'],
-            input_data['false_counts'],
-            input_data['half_true_counts'],
-            input_data['barely_true_counts'],
-            input_data['pants_fire_counts']
-        ])
-        truthfulness_ratio = input_data['true_counts'] / (total_fact_checks + 1)
+        # Preprocess the statement
+        processed_text = preprocess_statement(statement_text)
         
-        # Encode categorical inputs
-        encoders = st.session_state.encoders
-        encoded_inputs = {
-            'subject': encoders['subject'].transform([input_data['subject_category']])[0],
-            'party': encoders['party'].transform([input_data['party']])[0],
-            'state': encoders['state'].transform([input_data['state']])[0],
-            'job_title': encoders['job_title'].transform([input_data['job_title']])[0]
-        }
+        # Convert text to TF-IDF features
+        vectorizer = st.session_state.vectorizer
+        features = vectorizer.transform([processed_text])
         
-        # Prepare input data
-        input_features = np.array([[
-            encoded_inputs['subject'],
-            encoded_inputs['party'],
-            encoded_inputs['state'],
-            encoded_inputs['job_title'],
-            input_data['true_counts'],
-            input_data['false_counts'],
-            input_data['half_true_counts'],
-            input_data['barely_true_counts'],
-            input_data['pants_fire_counts'],
-            total_fact_checks,
-            statement_length,
-            truthfulness_ratio
-        ]])
-        
-        # Display the input statement
-        st.markdown("### Statement to Analyze")
-        st.markdown(f"> _{statement_text}_")
-        
-        # Make predictions with each model
+        # Get predictions from all models
+        results = {}
         for model_name, model in st.session_state.models.items():
-            st.markdown(f"### {model_name} Analysis")
-            
-            pred_class = model.predict(input_features)[0]
-            probabilities = model.predict_proba(input_features)[0]
-            confidence = f"(Confidence: {probabilities[pred_class]:.3f})"
-            
-            predicted_label = encoders['label'].inverse_transform([pred_class])[0]
-            
-            # Display prediction with color coding
-            label_colors = {
-                'true': ['#c6efce', '#006100'],
-                'mostly-true': ['#c6efce', '#006100'],
-                'half-true': ['#fff2cc', '#9c6500'],
-                'barely-true': ['#fff2cc', '#9c6500'],
-                'false': ['#ffc7ce', '#9c0006'],
-                'pants-fire': ['#ffc7ce', '#9c0006']
+            prediction = model.predict(features)[0]
+            prediction_proba = model.predict_proba(features)[0]
+            results[model_name] = {
+                'prediction': prediction,
+                'probabilities': prediction_proba
             }
+        
+        # Display the predictions
+        for model_name, result in results.items():
+            prediction = result['prediction']
+            probabilities = result['probabilities']
             
-            colors = label_colors.get(predicted_label.lower(), ['#b4c6e7', '#000000'])
+            # Create prediction box with appropriate styling
+            prediction_label = "True" if prediction else "False"
+            confidence = probabilities[1] if prediction else probabilities[0]
             
+            box_color = "#d4edda" if prediction else "#f8d7da"
+            text_color = "#155724" if prediction else "#721c24"
+            
+            st.markdown(f"### {model_name} Prediction")
             st.markdown(
-                f"""<div style='padding: 1.5rem; border-radius: 0.5rem; 
-                background-color: {colors[0]}; margin-bottom: 1rem;'>
-                <h3 style='margin:0; color: {colors[1]}; font-size: 1.5rem;'>
-                Verdict: {predicted_label.upper()}</h3>
-                <p style='margin:0; color: {colors[1]}; font-size: 1.1rem;'>{confidence}</p>
+                f"""<div style='background-color: {box_color}; color: {text_color}; 
+                padding: 1rem; border-radius: 0.5rem;'>
+                <h4 style='margin-top: 0;'>Prediction: {prediction_label}</h4>
+                <p>Confidence: {confidence:.2%}</p>
                 </div>""",
                 unsafe_allow_html=True
             )
-            
-            # Show probability distribution
-            proba_df = pd.DataFrame({
-                'Label': encoders['label'].classes_,
-                'Probability': probabilities,
-                'Percentage': probabilities * 100
-            }).sort_values('Probability', ascending=False)
-            
-            fig = px.bar(
-                proba_df,
-                x='Label',
-                y='Percentage',
-                title=f"Confidence Distribution - {model_name}",
-                labels={'Percentage': 'Confidence (%)'},
-                color='Percentage',
-                color_continuous_scale='RdYlGn'
-            )
-            fig.update_layout(xaxis_tickangle=45, showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
-    
+        
+        return results
+        
     except Exception as e:
         st.error(f"Error making prediction: {e}")
+        return None
+
+def analyze_random_test_data():
+    columns = [
+        'filename', 'label', 'statement', 'subject', 'speaker', 
+        'job_title', 'state', 'party', 'true_counts', 'false_counts',
+        'half_true_counts', 'barely_true_counts', 'pants_fire_counts', 'context'
+    ]
+
+    df = pd.read_csv('test.tsv', sep='\t', header=None, names=columns)
+
+    # Load test data
+    test_df = clean_data(df)
+    if test_df is None:
+        st.error("Failed to load test data")
+        return
+    
+    # Get 5 random samples
+    test_samples = test_df.sample(n=min(5, len(test_df)))
+    
+    for _, row in test_samples.iterrows():
+        st.markdown("---")
+        st.markdown("### Test Statement to Analyze")
+        st.markdown(f"> _{row['statement']}_")
+        st.markdown(f"**True Label:** {row['label']}")
+        st.markdown(f"**Context:** {row['context']}")
+        
+        make_prediction(row['statement'])
 
 def main():
     st.markdown('<h1 class="main-header">Fake News Detection</h1>', unsafe_allow_html=True)
     
     # Initialize application (loads models and data)
     initialize_app()
-    
+
     # Create tabs for different functionalities
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2 = st.tabs([
         "💬 Analysis",
-        "🎯 Detailed Analysis",
-        "📊 Data Overview"
+        "🎯 Detailed Analysis"
     ])
     
     with tab1:
@@ -435,9 +313,7 @@ def main():
     
     with tab2:
         detailed_analysis_tab()
-    
-    with tab3:
-        data_overview_tab()
+
 
 if __name__ == "__main__":
     main()
