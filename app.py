@@ -11,6 +11,7 @@ from nltk.stem import WordNetLemmatizer
 # Download required NLTK data
 nltk.download('punkt')
 nltk.download('wordnet')
+nltk.download('punkt_tab')
 
 # Set page config
 st.set_page_config(
