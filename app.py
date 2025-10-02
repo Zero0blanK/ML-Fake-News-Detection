@@ -4,8 +4,13 @@ import pickle
 import joblib
 import re
 import unicodedata
+import nltk
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
+
+# Download required NLTK data
+nltk.download('punkt')
+nltk.download('wordnet')
 
 # Set page config
 st.set_page_config(
