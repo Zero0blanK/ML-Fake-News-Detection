@@ -75,8 +75,8 @@ def preprocess_statement(statement):
 def load_models():
     """Load trained models and their associated data"""
     try:
-        # Load only Naive Bayes model
-        with open(f'models/naive_bayes.pkl', 'rb') as f:
+        # Load only SVM model
+        with open(f'models/svm.pkl', 'rb') as f:
             model = pickle.load(f)
         
         # Load TF-IDF vectorizer
@@ -151,7 +151,9 @@ def detailed_analysis_tab():
     
     with manual_tab:
         st.markdown("""
-        Enter a statement to analyze using our Naive Bayes classifier.
+        Enter a statement to analyze using our **Support Vector Machine (SVM)** classifier.
+
+        Support Vector Machine (SVM) finds the optimal boundary to separate true and false statements. It's particularly effective for text classification tasks and high-dimensional data like TF-IDF features.
         """)
         
         # Create a form for input
@@ -189,8 +191,10 @@ def detailed_analysis_tab():
     
     with test_tab:
         st.markdown("""
-        Analyze examples from our test dataset to evaluate model performance
+        Analyze examples from our test dataset to evaluate svm model performance
         on real-world statements.
+                    
+        Support Vector Machine (SVM) finds the optimal boundary to separate true and false statements. It's particularly effective for text classification tasks and high-dimensional data like TF-IDF features.
         """)
         
         if st.button("Analyze Test Examples", type="primary"):
@@ -198,7 +202,7 @@ def detailed_analysis_tab():
                 analyze_random_test_data()
 
 def make_prediction(statement_text):
-    """Make predictions using Naive Bayes model"""
+    """Make predictions using SVM model"""
     try:
         # Preprocess the statement
         processed_text = preprocess_statement(statement_text)
@@ -210,22 +214,31 @@ def make_prediction(statement_text):
         if hasattr(model, 'named_steps'):
             # Model is a pipeline - pass processed text directly
             prediction = model.predict([processed_text])[0]
-            prediction_proba = model.predict_proba([processed_text])[0]
+            
+            # SVM with LinearSVC doesn't have predict_proba, use decision_function
+            if hasattr(model.named_steps['clf'], 'decision_function'):
+                decision_score = model.decision_function([processed_text])[0]
+                confidence = min(0.95, max(0.55, abs(decision_score) / 2))
+            else:
+                confidence = 0.75
         else:
             # Model is a standalone classifier - use TF-IDF vectorizer
             vectorizer = st.session_state.vectorizer
             features = vectorizer.transform([processed_text])
             prediction = model.predict(features)[0]
-            prediction_proba = model.predict_proba(features)[0]
-        
-        confidence = prediction_proba[1] if prediction else prediction_proba[0]
+            
+            if hasattr(model, 'decision_function'):
+                decision_score = model.decision_function(features)[0]
+                confidence = min(0.95, max(0.55, abs(decision_score) / 2))
+            else:
+                confidence = 0.75
         
         # Display the prediction
         prediction_label = "True" if prediction else "False"
         box_color = "#d4edda" if prediction else "#f8d7da"
         text_color = "#155724" if prediction else "#721c24"
         
-        st.markdown("### Naive Bayes Prediction")
+        st.markdown("### Support Vector Machine (SVM) Prediction")
         st.markdown(
             f"""<div style='background-color: {box_color}; color: {text_color}; 
             padding: 1rem; border-radius: 0.5rem;'>
@@ -237,7 +250,6 @@ def make_prediction(statement_text):
         
         return {
             'prediction': bool(prediction),
-            'probabilities': prediction_proba,
             'confidence': confidence
         }
         
@@ -247,6 +259,8 @@ def make_prediction(statement_text):
         st.write(f"Model type: {type(st.session_state.model)}")
         if hasattr(st.session_state.model, 'named_steps'):
             st.write(f"Pipeline steps: {list(st.session_state.model.named_steps.keys())}")
+            clf = st.session_state.model.named_steps['clf']
+            st.write(f"Classifier type: {type(clf)}")
         return None
 
 def analyze_random_test_data():
@@ -277,11 +291,11 @@ def analyze_random_test_data():
         make_prediction(row['statement'])
 
 def main():
-    st.markdown('<h1 class="main-header">Fake News Detection</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">Fake News Detection - SVM Classifier</h1>', unsafe_allow_html=True)
     
     initialize_app()
 
-    tab = st.tabs(["Detailed Analysis"])
+    tab = st.tabs(["SVM Analysis"])
     
     with tab[0]:
         detailed_analysis_tab()
