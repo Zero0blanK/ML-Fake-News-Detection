@@ -75,19 +75,16 @@ def preprocess_statement(statement):
 def load_models():
     """Load trained models and their associated data"""
     try:
-        models = {}
-        model_names = ['svm', 'naive_bayes', 'random_forest']
-        
-        for name in model_names:
-            with open(f'models/{name}.pkl', 'rb') as f:
-                models[name.replace('_', ' ').title()] = pickle.load(f)
+        # Load only Naive Bayes model
+        with open(f'models/naive_bayes.pkl', 'rb') as f:
+            model = pickle.load(f)
         
         # Load TF-IDF vectorizer
         vectorizer = joblib.load('models/tfidf.joblib')
         
-        return models, vectorizer
+        return model, vectorizer
     except Exception as e:
-        st.error(f"Error loading models: {e}")
+        st.error(f"Error loading model: {e}")
         st.info("Please run train_models.ipynb first to train and save the models.")
         return None, None
 
@@ -127,20 +124,19 @@ def clean_data(df):
     
     return df
 
-
 def initialize_app():
     """Initialize the application by loading models"""
     if 'initialized' not in st.session_state:
         with st.spinner("Initializing application..."):
-            # Load models and vectorizer
-            models, vectorizer = load_models()
-            if models is None:
-                st.error("Failed to load models. Please run train_models.ipynb first.")
+            # Load model and vectorizer
+            model, vectorizer = load_models()
+            if model is None:
+                st.error("Failed to load model. Please run train_models.ipynb first.")
                 st.stop()
             
             # Store in session state
             st.session_state.update({
-                'models': models,
+                'model': model,
                 'vectorizer': vectorizer,
                 'initialized': True
             })
@@ -155,8 +151,7 @@ def detailed_analysis_tab():
     
     with manual_tab:
         st.markdown("""
-        Enter a statement to analyze along with metadata to understand the model's performance
-        with different input combinations.
+        Enter a statement to analyze using our Naive Bayes classifier.
         """)
         
         # Create a form for input
@@ -201,54 +196,57 @@ def detailed_analysis_tab():
         if st.button("Analyze Test Examples", type="primary"):
             with st.spinner("Analyzing test examples..."):
                 analyze_random_test_data()
-    
 
 def make_prediction(statement_text):
-    """Make predictions using all models"""
+    """Make predictions using Naive Bayes model"""
     try:
         # Preprocess the statement
         processed_text = preprocess_statement(statement_text)
         
-        # Convert text to TF-IDF features
-        vectorizer = st.session_state.vectorizer
-        features = vectorizer.transform([processed_text])
+        # Get model from session state
+        model = st.session_state.model
         
-        # Get predictions from all models
-        results = {}
-        for model_name, model in st.session_state.models.items():
+        # Check if model is a pipeline or standalone classifier
+        if hasattr(model, 'named_steps'):
+            # Model is a pipeline - pass processed text directly
+            prediction = model.predict([processed_text])[0]
+            prediction_proba = model.predict_proba([processed_text])[0]
+        else:
+            # Model is a standalone classifier - use TF-IDF vectorizer
+            vectorizer = st.session_state.vectorizer
+            features = vectorizer.transform([processed_text])
             prediction = model.predict(features)[0]
             prediction_proba = model.predict_proba(features)[0]
-            results[model_name] = {
-                'prediction': prediction,
-                'probabilities': prediction_proba
-            }
         
-        # Display the predictions
-        for model_name, result in results.items():
-            if (model_name == "Svm"):
-                prediction = result['prediction']
-                probabilities = result['probabilities']
-                
-                prediction_label = "True" if prediction else "False"
-                confidence = probabilities[1] if prediction else probabilities[0]
-                
-                box_color = "#d4edda" if prediction else "#f8d7da"
-                text_color = "#155724" if prediction else "#721c24"
-                
-                st.markdown(f"### {model_name} Prediction")
-                st.markdown(
-                    f"""<div style='background-color: {box_color}; color: {text_color}; 
-                    padding: 1rem; border-radius: 0.5rem;'>
-                    <h4 style='margin-top: 0;'>Prediction: {prediction_label}</h4>
-                    <p>Confidence: {confidence:.2%}</p>
-                    </div>""",
-                    unsafe_allow_html=True
-                )
+        confidence = prediction_proba[1] if prediction else prediction_proba[0]
         
-        return results
+        # Display the prediction
+        prediction_label = "True" if prediction else "False"
+        box_color = "#d4edda" if prediction else "#f8d7da"
+        text_color = "#155724" if prediction else "#721c24"
+        
+        st.markdown("### Naive Bayes Prediction")
+        st.markdown(
+            f"""<div style='background-color: {box_color}; color: {text_color}; 
+            padding: 1rem; border-radius: 0.5rem;'>
+            <h4 style='margin-top: 0;'>Prediction: {prediction_label}</h4>
+            <p>Confidence: {confidence:.2%}</p>
+            </div>""",
+            unsafe_allow_html=True
+        )
+        
+        return {
+            'prediction': bool(prediction),
+            'probabilities': prediction_proba,
+            'confidence': confidence
+        }
         
     except Exception as e:
         st.error(f"Error making prediction: {e}")
+        st.error("Debug info:")
+        st.write(f"Model type: {type(st.session_state.model)}")
+        if hasattr(st.session_state.model, 'named_steps'):
+            st.write(f"Pipeline steps: {list(st.session_state.model.named_steps.keys())}")
         return None
 
 def analyze_random_test_data():
@@ -287,7 +285,6 @@ def main():
     
     with tab[0]:
         detailed_analysis_tab()
-
 
 if __name__ == "__main__":
     main()
