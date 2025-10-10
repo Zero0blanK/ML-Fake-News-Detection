@@ -4,8 +4,14 @@ import pickle
 import joblib
 import re
 import unicodedata
+import nltk
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
+
+# Download required NLTK data
+nltk.download('punkt')
+nltk.download('wordnet')
+nltk.download('punkt_tab')
 
 # Set page config
 st.set_page_config(
@@ -141,31 +147,6 @@ def initialize_app():
     
     return True
 
-
-def quick_analysis_tab():
-    """Statement analysis interface"""
-    st.header("💬 Quick Statement Analysis")
-    
-    # Introduction text
-    st.markdown("""
-    Enter a political statement and our models will analyze it to determine if it's likely to be true or false.
-    The models will analyze the text content to make predictions.
-    """)
-    
-    # Text input for statement
-    statement_text = st.text_area(
-        "Enter the political statement to analyze:",
-        height=150,
-        placeholder="Enter the political statement here..."
-    )
-    
-    if st.button("Analyze Statement", type="primary"):
-        if not statement_text:
-            st.error("Please enter a statement to analyze.")
-            return
-        
-        make_prediction(statement_text)
-
 def detailed_analysis_tab():
     st.header("🎯 Detailed Analysis")
     
@@ -220,6 +201,7 @@ def detailed_analysis_tab():
         if st.button("Analyze Test Examples", type="primary"):
             with st.spinner("Analyzing test examples..."):
                 analyze_random_test_data()
+    
 
 def make_prediction(statement_text):
     """Make predictions using all models"""
@@ -243,25 +225,25 @@ def make_prediction(statement_text):
         
         # Display the predictions
         for model_name, result in results.items():
-            prediction = result['prediction']
-            probabilities = result['probabilities']
-            
-            # Create prediction box with appropriate styling
-            prediction_label = "True" if prediction else "False"
-            confidence = probabilities[1] if prediction else probabilities[0]
-            
-            box_color = "#d4edda" if prediction else "#f8d7da"
-            text_color = "#155724" if prediction else "#721c24"
-            
-            st.markdown(f"### {model_name} Prediction")
-            st.markdown(
-                f"""<div style='background-color: {box_color}; color: {text_color}; 
-                padding: 1rem; border-radius: 0.5rem;'>
-                <h4 style='margin-top: 0;'>Prediction: {prediction_label}</h4>
-                <p>Confidence: {confidence:.2%}</p>
-                </div>""",
-                unsafe_allow_html=True
-            )
+            if (model_name == "Svm"):
+                prediction = result['prediction']
+                probabilities = result['probabilities']
+                
+                prediction_label = "True" if prediction else "False"
+                confidence = probabilities[1] if prediction else probabilities[0]
+                
+                box_color = "#d4edda" if prediction else "#f8d7da"
+                text_color = "#155724" if prediction else "#721c24"
+                
+                st.markdown(f"### {model_name} Prediction")
+                st.markdown(
+                    f"""<div style='background-color: {box_color}; color: {text_color}; 
+                    padding: 1rem; border-radius: 0.5rem;'>
+                    <h4 style='margin-top: 0;'>Prediction: {prediction_label}</h4>
+                    <p>Confidence: {confidence:.2%}</p>
+                    </div>""",
+                    unsafe_allow_html=True
+                )
         
         return results
         
@@ -299,19 +281,11 @@ def analyze_random_test_data():
 def main():
     st.markdown('<h1 class="main-header">Fake News Detection</h1>', unsafe_allow_html=True)
     
-    # Initialize application (loads models and data)
     initialize_app()
 
-    # Create tabs for different functionalities
-    tab1, tab2 = st.tabs([
-        "💬 Analysis",
-        "🎯 Detailed Analysis"
-    ])
+    tab = st.tabs(["Detailed Analysis"])
     
-    with tab1:
-        quick_analysis_tab()
-    
-    with tab2:
+    with tab[0]:
         detailed_analysis_tab()
 
 
